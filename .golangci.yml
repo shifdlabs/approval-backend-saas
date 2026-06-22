@@ -1,0 +1,11 @@
+linters:
+  enable:
+    - govet       # Reports suspicious constructs, such as Printf calls whose arguments do not align with the format string.
+    - golint      # Reports style mistakes. (Deprecated, should be replaced with revive)
+    - staticcheck # Reports various issues, such as bugs, performance issues, and code simplifications.
+    - gofmt       # Checks if the code is properly formatted.
+    - goimports   # Checks if the imports are properly formatted and organized.
+
+run:
+  timeout: 5m    # Sets a timeout for the linter run.
+  tests: true    # Includes test files in the linter run.

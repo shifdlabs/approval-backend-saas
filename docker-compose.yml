@@ -1,0 +1,40 @@
+services:
+  postgres:
+    image: postgres:16
+    container_name: postgres-approval-subs
+    ports:
+      - '6502:5432'
+    volumes:
+      - approval-subs-postgres:/var/lib/postgresql/data
+    env_file:
+      - ./app.env
+    healthcheck:
+      test: ['CMD-SHELL', 'pg_isready -U $$POSTGRES_USER -d $$POSTGRES_DB']
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 10s
+
+  pgAdmin:
+    image: dpage/pgadmin4
+    container_name: pgAdmin-approval-subs
+    env_file:
+      - ./app.env
+    ports:
+      - '5052:80'
+    depends_on:
+      postgres:
+        condition: service_healthy
+
+  redis:
+    image: redis:alpine
+    container_name: redis-approval-subs
+    ports:
+      - '6382:6379'
+    volumes:
+      - approval-subs-redis:/data
+    command: redis-server --save 60 1 --loglevel warning
+
+volumes:
+  approval-subs-postgres:
+  approval-subs-redis:

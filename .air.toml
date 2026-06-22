@@ -1,0 +1,5 @@
+# .air.toml
+[build]
+cmd = "go build -o ./tmp/main ."
+bin = "./tmp/main"
+full_bin = "APP_ENV=dev APP_USER=air ./tmp/main"
