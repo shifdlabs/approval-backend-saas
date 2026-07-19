@@ -137,6 +137,17 @@ func (t *UserRepositoryImpl) MultipleDelete(ids []string, orgID string) *helper.
 	return nil
 }
 
+func (t *UserRepositoryImpl) CountActive(orgID string) (int64, *helper.ErrorModel) {
+	var count int64
+	result := t.Db.Model(&model.User{}).Where("organization_id = ? AND access = ?", orgID, true).Count(&count)
+	if result.Error != nil {
+		msg := "Failed to count active users"
+		return 0, helper.ErrorCatcher(result.Error, 500, &msg)
+	}
+
+	return count, nil
+}
+
 func (t *UserRepositoryImpl) GetByEmail(email string, orgID string) (*model.User, *helper.ErrorModel) {
 	var user model.User
 

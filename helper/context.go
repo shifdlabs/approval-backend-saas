@@ -5,12 +5,13 @@ import "github.com/gin-gonic/gin"
 // Gin context keys populated by the JWKS auth middleware from the SIS JWT claims.
 // Every tenant-scoped request carries these after authentication.
 const (
-	ContextKeyUserID   = "user_id"  // JWT "sub"      → users.id
-	ContextKeyOrgID    = "org_id"   // JWT "org_id"   → tenant scope
-	ContextKeyOrgRole  = "org_role" // JWT "org_role" → owner|admin|member
-	ContextKeyEmail    = "email"    // JWT "email"
-	ContextKeyName     = "name"     // JWT "name"
-	ContextKeyProducts = "products" // JWT "products" → active subscriptions
+	ContextKeyUserID    = "user_id"    // JWT "sub"         → users.id
+	ContextKeyOrgID     = "org_id"     // JWT "org_id"      → tenant scope
+	ContextKeyOrgRole   = "org_role"   // JWT "org_role"    → owner|admin|member
+	ContextKeyEmail     = "email"      // JWT "email"
+	ContextKeyName      = "name"       // JWT "name"
+	ContextKeyProducts  = "products"   // JWT "products"    → active subscriptions
+	ContextKeyUserLimit = "user_limit" // JWT "user_limit"  → max active members (-1 = unlimited)
 )
 
 // ctxString reads a string value from the Gin context, returning "" if absent
@@ -38,6 +39,18 @@ func GetEmail(c *gin.Context) string { return ctxString(c, ContextKeyEmail) }
 
 // GetName returns the user display name (JWT name claim), or "".
 func GetName(c *gin.Context) string { return ctxString(c, ContextKeyName) }
+
+// GetUserLimit returns the org's max active member count (JWT user_limit
+// claim): -1 means unlimited. Defaults to -1 (unlimited) if the claim is
+// absent, so tokens issued before this claim existed keep working unchanged.
+func GetUserLimit(c *gin.Context) int {
+	if v, ok := c.Get(ContextKeyUserLimit); ok {
+		if n, ok := v.(int); ok {
+			return n
+		}
+	}
+	return -1
+}
 
 // GetProducts returns the active product subscriptions (JWT products claim).
 func GetProducts(c *gin.Context) []string {

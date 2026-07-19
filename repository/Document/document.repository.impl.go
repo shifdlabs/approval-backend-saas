@@ -278,8 +278,7 @@ func (t *DocumentRepositoryImpl) GetLastestCompleted(id string, orgID string) (*
 	response := t.Db.
 		Model(&model.Document{}).
 		Where("organization_id = ?", orgID).
-		Where("status = 2").
-		Or("status = 3").
+		Where("status IN ?", []int{2, 3}).
 		Where("author_id = ?", id).
 		Order("created_at DESC").
 		First(&doc)

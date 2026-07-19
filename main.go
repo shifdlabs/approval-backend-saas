@@ -1,15 +1,20 @@
 package main
 
 import (
-	"fmt"
+	"context"
+	"errors"
 	"log"
 	"net/http"
+	"os"
+	"os/signal"
+	"syscall"
 	"time"
 
 	"Microservice/config"
 	"Microservice/controller"
 	"Microservice/model"
 	"Microservice/pkg/jwks"
+	"Microservice/pkg/s3presign"
 	"Microservice/router"
 
 	appSettingsRepository "Microservice/repository/AppSettings"
@@ -83,7 +88,7 @@ func main() {
 
 	// SIS JWKS: fetch the SIS public key on startup (panics if unreachable) and
 	// refresh it in the background to handle key rotation.
-	jwksClient, _ := jwks.NewJWKSClient(envConf.SISJWKSURL)
+	jwksClient, _ := jwks.NewJWKSClient(envConf.SISJWKSURL, envConf.SISIssuer)
 	jwksRefresh := envConf.JWKSRefreshInterval
 	if jwksRefresh <= 0 {
 		jwksRefresh = 24 * time.Hour
@@ -200,6 +205,15 @@ func main() {
 	verificationController := controller.NewVerificationController(documentService)
 	letterTemplateController := controller.NewLetterTemplateController(letterTemplateSvc, userLogService)
 
+	// S3 presigner (AUDIT SEC-01): the backend now holds the S3 credentials and
+	// hands the browser short-lived presigned URLs. New(...) returns nil when
+	// creds are absent; the controller reports 503 in that case.
+	s3Presigner := s3presign.New(envConf.S3Region, envConf.S3Bucket, envConf.S3AccessKeyID, envConf.S3SecretAccessKey)
+	if !s3Presigner.Enabled() {
+		log.Println("warning: S3 presigner not configured (S3_* env missing) — file uploads will return 503")
+	}
+	uploadController := controller.NewUploadController(s3Presigner)
+
 	// Initialize Router
 	routes := router.NewRouter(
 		db,
@@ -223,22 +237,40 @@ func main() {
 		delegatorController,
 		verificationController,
 		letterTemplateController,
+		uploadController,
+		envConf.CORSAllowedOrigins,
 	)
 
 	// Intialize Server
 	server := &http.Server{
-		Addr:           ":8081",
+		Addr:           ":" + envConf.ServerPort,
 		Handler:        routes,
 		ReadTimeout:    10 * time.Second,
 		WriteTimeout:   10 * time.Second,
 		MaxHeaderBytes: 1 << 20,
 	}
 
-	errProvideServer := server.ListenAndServe().Error()
+	// AUDIT SEC-10: run the server in a goroutine and block on OS signals for a
+	// graceful shutdown. The previous `server.ListenAndServe().Error()` would
+	// panic if ListenAndServe ever returned nil, and left no clean shutdown path.
+	go func() {
+		log.Printf("Message: Server Successfully Running on :%s", envConf.ServerPort)
+		if err := server.ListenAndServe(); err != nil && !errors.Is(err, http.ErrServerClosed) {
+			log.Fatalf("server error: %v", err)
+		}
+	}()
 
-	fmt.Println(errProvideServer)
+	quit := make(chan os.Signal, 1)
+	signal.Notify(quit, syscall.SIGINT, syscall.SIGTERM)
+	<-quit
+	log.Println("Message: Shutting down server...")
 
-	println("Message: Server Successfully Running...")
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+	if err := server.Shutdown(ctx); err != nil {
+		log.Fatalf("forced shutdown: %v", err)
+	}
+	log.Println("Message: Server stopped cleanly")
 }
 
 /*

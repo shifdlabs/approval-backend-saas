@@ -2,21 +2,29 @@ package middleware
 
 import (
 	"Microservice/helper"
+	"Microservice/model"
 	"Microservice/pkg/jwks"
 	"errors"
 	"fmt"
+	"log"
 	"net/http"
 	"strings"
 
 	"github.com/gin-gonic/gin"
 	"github.com/golang-jwt/jwt/v4"
+	uuid "github.com/satori/go.uuid"
+	"gorm.io/gorm"
+	"gorm.io/gorm/clause"
 )
 
 // JWKSAuth validates the incoming SIS-issued JWT against the cached SIS public
 // key (no network call per request) and stores the identity claims in the Gin
 // context. On a validation failure it refreshes the JWKS once and retries, to
 // transparently handle SIS key rotation; if it still fails it returns 401.
-func JWKSAuth(client *jwks.JWKSClient) gin.HandlerFunc {
+// It also lazily provisions a local `users` row for the org member on first
+// sight (see ensureUserProvisioned) so downstream handlers never have to deal
+// with "valid SIS token, no matching local row".
+func JWKSAuth(client *jwks.JWKSClient, db *gorm.DB) gin.HandlerFunc {
 	return func(c *gin.Context) {
 		tokenString := extractBearer(c)
 		if tokenString == "" {
@@ -36,14 +44,103 @@ func JWKSAuth(client *jwks.JWKSClient) gin.HandlerFunc {
 			return
 		}
 
-		c.Set(helper.ContextKeyUserID, claimString(claims, "sub"))
-		c.Set(helper.ContextKeyOrgID, claimString(claims, "org_id"))
+		userID := claimString(claims, "sub")
+		orgID := claimString(claims, "org_id")
+
+		c.Set(helper.ContextKeyUserID, userID)
+		c.Set(helper.ContextKeyOrgID, orgID)
 		c.Set(helper.ContextKeyOrgRole, claimString(claims, "org_role"))
 		c.Set(helper.ContextKeyEmail, claimString(claims, "email"))
 		c.Set(helper.ContextKeyName, claimString(claims, "name"))
 		c.Set(helper.ContextKeyProducts, claimStringSlice(claims, "products"))
+		c.Set(helper.ContextKeyUserLimit, claimInt(claims, "user_limit", -1))
+
+		if err := ensureUserProvisioned(db, userID, orgID, claimString(claims, "email"), claimString(claims, "name"), claimString(claims, "org_role")); err != nil {
+			log.Printf("jwks: failed to auto-provision user %s in org %s: %v", userID, orgID, err)
+		}
 
 		c.Next()
+	}
+}
+
+// ensureUserProvisioned lazily creates a local Approval `users` row for an org
+// member the first time we see their JWT, using the identity SIS already
+// vouches for (sub/org_id/email/name/org_role). Approval's users table only
+// holds org-scoped profile/role/position data now — SIS owns registration —
+// so nothing upstream needs to know whether this is someone's first request
+// or their thousandth.
+//
+// Known limitation: users.id is a plain primary key, not composite with
+// organization_id, so a SIS account that's a member of more than one org can
+// only be auto-provisioned into the first org Approval sees them in. A later
+// request under a different org_id for the same sub will keep 404ing until
+// the schema supports one profile per (user, org) pair.
+func ensureUserProvisioned(db *gorm.DB, userID, orgID, email, name, orgRole string) error {
+	if userID == "" || orgID == "" {
+		return nil
+	}
+
+	var exists bool
+	if err := db.Raw(
+		"SELECT EXISTS(SELECT 1 FROM users WHERE id = ? AND organization_id = ?)",
+		userID, orgID,
+	).Scan(&exists).Error; err != nil {
+		return err
+	}
+	if exists {
+		return nil
+	}
+
+	userUUID, err := uuid.FromString(userID)
+	if err != nil {
+		return fmt.Errorf("parse sub as uuid: %w", err)
+	}
+	orgUUID, err := uuid.FromString(orgID)
+	if err != nil {
+		return fmt.Errorf("parse org_id as uuid: %w", err)
+	}
+
+	role := 1
+	if orgRole == "owner" || orgRole == "admin" {
+		role = 99
+	}
+	firstName, lastName := splitName(name)
+
+	newUser := model.User{
+		ID:             &userUUID,
+		OrganizationID: &orgUUID,
+		Email:          email,
+		Password:       "SIS_MANAGED_NO_LOCAL_PASSWORD", // auth lives in SIS; column is still NOT NULL pending CLAUDE.md Step 5
+		Role:           role,
+		FirstName:      firstName,
+		LastName:       lastName,
+		Access:         true,
+	}
+
+	// ON CONFLICT DO NOTHING covers two cases: a race between concurrent
+	// requests provisioning the same row, and the multi-org limitation above
+	// (id already taken by this same user under a different org_id).
+	result := db.Clauses(clause.OnConflict{DoNothing: true}).Create(&newUser)
+	if result.Error != nil {
+		return result.Error
+	}
+	if result.RowsAffected == 0 {
+		log.Printf("jwks: user %s already provisioned under a different org; skipping (multi-org membership not yet supported)", userID)
+	}
+	return nil
+}
+
+// splitName splits a JWT "name" claim ("Jane Doe") into first/last name for
+// the local profile row. Single-word names land entirely in firstName.
+func splitName(name string) (first, last string) {
+	parts := strings.Fields(name)
+	switch len(parts) {
+	case 0:
+		return "", ""
+	case 1:
+		return parts[0], ""
+	default:
+		return parts[0], strings.Join(parts[1:], " ")
 	}
 }
 
@@ -53,18 +150,12 @@ func JWKSAuth(client *jwks.JWKSClient) gin.HandlerFunc {
 func SubscriptionCheck() gin.HandlerFunc {
 	return func(c *gin.Context) {
 		if helper.GetOrgID(c) == "" {
-			c.AbortWithStatusJSON(http.StatusForbidden, gin.H{
-				"error": "Request is not scoped to an organization",
-				"code":  "ORG_MISSING",
-			})
+			errorResponse(c, http.StatusForbidden, "Request is not scoped to an organization", "ORG_MISSING")
 			return
 		}
 
 		if !contains(helper.GetProducts(c), "shifd-approval") {
-			c.AbortWithStatusJSON(http.StatusForbidden, gin.H{
-				"error": "Subscription to Shifd Approval is not active",
-				"code":  "SUBSCRIPTION_INACTIVE",
-			})
+			errorResponse(c, http.StatusForbidden, "Subscription to Shifd Approval is not active", "SUBSCRIPTION_INACTIVE")
 			return
 		}
 
@@ -72,18 +163,19 @@ func SubscriptionCheck() gin.HandlerFunc {
 	}
 }
 
-// parseAndValidate verifies the RS256 signature with the cached SIS public key
-// and returns the token claims.
+// parseAndValidate verifies the RS256 signature using the kid-matched cached SIS
+// public key and returns the token claims. If the client has an expected issuer
+// configured, the iss claim is validated as well.
 func parseAndValidate(client *jwks.JWKSClient, tokenString string) (jwt.MapClaims, error) {
-	key := client.GetPublicKey()
-	if key == nil {
-		return nil, errors.New("no SIS public key available")
-	}
-
 	claims := jwt.MapClaims{}
 	token, err := jwt.ParseWithClaims(tokenString, claims, func(t *jwt.Token) (interface{}, error) {
 		if _, ok := t.Method.(*jwt.SigningMethodRSA); !ok {
 			return nil, fmt.Errorf("unexpected signing method: %v", t.Header["alg"])
+		}
+		kid, _ := t.Header["kid"].(string)
+		key := client.GetPublicKey(kid)
+		if key == nil {
+			return nil, errors.New("no SIS public key available")
 		}
 		return key, nil
 	})
@@ -93,6 +185,13 @@ func parseAndValidate(client *jwks.JWKSClient, tokenString string) (jwt.MapClaim
 	if !token.Valid {
 		return nil, errors.New("invalid token")
 	}
+
+	if expectedIss := client.GetExpectedIssuer(); expectedIss != "" {
+		if iss, _ := claims["iss"].(string); iss != expectedIss {
+			return nil, fmt.Errorf("invalid token issuer: %q", iss)
+		}
+	}
+
 	return claims, nil
 }
 
@@ -106,9 +205,20 @@ func extractBearer(c *gin.Context) string {
 }
 
 func unauthorized(c *gin.Context, msg string) {
-	c.AbortWithStatusJSON(http.StatusUnauthorized, gin.H{
-		"error": msg,
-		"code":  "UNAUTHORIZED",
+	errorResponse(c, http.StatusUnauthorized, msg, "UNAUTHORIZED")
+}
+
+// errorResponse matches the {success, code, message} envelope used by every
+// other endpoint in this app (see helper.ResponseError / utils.ErrorResponse),
+// plus an errorCode the frontend can branch on for states that need dedicated
+// UI (e.g. SUBSCRIPTION_INACTIVE), without breaking generic error handling
+// that only reads success/code/message.
+func errorResponse(c *gin.Context, status int, message string, errorCode string) {
+	c.AbortWithStatusJSON(status, gin.H{
+		"success":   false,
+		"code":      status,
+		"message":   message,
+		"errorCode": errorCode,
 	})
 }
 
@@ -133,6 +243,16 @@ func claimStringSlice(claims jwt.MapClaims, key string) []string {
 		}
 	}
 	return out
+}
+
+// claimInt reads a numeric claim. JWT numeric claims decode as float64 (via
+// encoding/json into jwt.MapClaims), so that's the only case handled; returns
+// defaultVal if the claim is absent or not a number.
+func claimInt(claims jwt.MapClaims, key string, defaultVal int) int {
+	if v, ok := claims[key].(float64); ok {
+		return int(v)
+	}
+	return defaultVal
 }
 
 func contains(list []string, target string) bool {

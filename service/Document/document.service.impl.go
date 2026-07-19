@@ -470,10 +470,15 @@ func (t DocumentServiceImpl) GetInProgressOverviewByDocId(documentId string, org
 					hasSigned = seq.Signature
 				}
 
+				positionName := ""
+				if displayUser.Position != nil {
+					positionName = displayUser.Position.Name
+				}
+
 				dateStr := approver.CreatedAt.String()
 				approvers = append(approvers, response.ApproverForOverview{
 					Name:         displayUser.FirstName + " " + displayUser.LastName,
-					Title:        displayUser.Position.Name,
+					Title:        positionName,
 					Approved:     &approver.IsApproved,
 					Date:         &dateStr,
 					Signature:    hasSigned,
@@ -511,9 +516,14 @@ func (t DocumentServiceImpl) GetInProgressOverviewByDocId(documentId string, org
 					}
 				}
 
+				positionName := ""
+				if user.Position != nil {
+					positionName = user.Position.Name
+				}
+
 				approvers = append(approvers, response.ApproverForOverview{
 					Name:         user.FirstName + " " + user.LastName,
-					Title:        user.Position.Name,
+					Title:        positionName,
 					Approved:     nil,
 					Date:         nil,
 					Signature:    sequence.Signature,
@@ -584,10 +594,15 @@ func (t DocumentServiceImpl) GetInProgressOverview(userId string, orgID string) 
 					hasSigned = seq.Signature
 				}
 
+				positionName := ""
+				if user.Position != nil {
+					positionName = user.Position.Name
+				}
+
 				dateStr := approver.CreatedAt.String()
 				approvers = append(approvers, response.ApproverForOverview{
 					Name:         user.FirstName + " " + user.LastName,
-					Title:        user.Position.Name,
+					Title:        positionName,
 					Approved:     &approver.IsApproved,
 					Date:         &dateStr,
 					Signature:    hasSigned,
@@ -614,9 +629,14 @@ func (t DocumentServiceImpl) GetInProgressOverview(userId string, orgID string) 
 					signatureUrl = &signature.ImageURL
 				}
 
+				positionName := ""
+				if user.Position != nil {
+					positionName = user.Position.Name
+				}
+
 				approvers = append(approvers, response.ApproverForOverview{
 					Name:         user.FirstName + " " + user.LastName,
-					Title:        user.Position.Name,
+					Title:        positionName,
 					Approved:     nil,
 					Date:         nil,
 					Signature:    sequence.Signature,
@@ -657,9 +677,14 @@ func (t DocumentServiceImpl) GetRejectedOverview(userId string, orgID string) (*
 				return nil, err
 			}
 
+			positionName := ""
+			if user.Position != nil {
+				positionName = user.Position.Name
+			}
+
 			rejected = response.RejectedOverviewResponse{
 				Name:    user.FirstName + " " + user.LastName,
-				Title:   user.Position.Name,
+				Title:   positionName,
 				Subject: document.Subject,
 				Reason:  rejectedBy.Description,
 				Date:    rejectedBy.CreatedAt.String(),
@@ -706,17 +731,27 @@ func (t DocumentServiceImpl) GetCompletedOverview(userId string, orgID string) (
 				if err != nil {
 					return nil, err
 				}
+				recipientPositionName := ""
+				if user.Position != nil {
+					recipientPositionName = user.Position.Name
+				}
+
 				internalRecipients = append(internalRecipients, response.InternalRecipientForOverview{
 					Name:  user.FirstName + " " + user.LastName,
-					Title: user.Position.Name,
+					Title: recipientPositionName,
 				})
 			}
+		}
+
+		positionName := ""
+		if user.Position != nil {
+			positionName = user.Position.Name
 		}
 
 		completed = response.CompletedOverviewResponse{
 			IsFinished:        document.Status == 2,
 			Name:              user.FirstName + " " + user.LastName,
-			Title:             user.Position.Name,
+			Title:             positionName,
 			Subject:           document.Subject,
 			Date:              history.CreatedAt.String(),
 			InternalRecipient: internalRecipients,
@@ -750,6 +785,7 @@ func (t DocumentServiceImpl) Update(request request.UpdateDocumentRequest, orgID
 	}
 
 	trx := t.Db.Begin()
+	defer trx.Rollback()
 
 	document, err := t.DocumentRepository.Get(request.Id, orgID)
 	if err != nil {

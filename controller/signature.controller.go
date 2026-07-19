@@ -37,6 +37,15 @@ func (controller *SignatureController) Create(ctx *gin.Context) {
 		return
 	}
 
+	// Signatures are self-service: force the target to the authenticated user so
+	// a member cannot create/forge another member's signature (AUDIT IDOR).
+	callerID, errCaller := helper.GetUserId(ctx)
+	if errCaller != nil {
+		utils.ErrorResponse(ctx, helper.ErrorModel{Code: 400, Message: "Bad Request"})
+		return
+	}
+	payload.UserID = *callerID
+
 	err := controller.signatureService.Create(payload, orgID)
 	if err != nil {
 		utils.ErrorResponse(ctx, *err)
@@ -51,7 +60,14 @@ func (controller *SignatureController) Update(ctx *gin.Context) {
 	if !ok {
 		return
 	}
-	userId := ctx.Param("userId")
+	// Self-service: ignore the path param and act on the caller's own signature
+	// so a member cannot overwrite another member's signature (AUDIT IDOR).
+	callerID, errCaller := helper.GetUserId(ctx)
+	if errCaller != nil {
+		utils.ErrorResponse(ctx, helper.ErrorModel{Code: 400, Message: "Bad Request"})
+		return
+	}
+	userId := *callerID
 	var payload signatureRequest.UpdateSignatureRequest
 
 	errBindJSON := ctx.ShouldBindJSON(&payload)
@@ -80,7 +96,14 @@ func (controller *SignatureController) Delete(ctx *gin.Context) {
 	if !ok {
 		return
 	}
-	userId := ctx.Param("userId")
+	// Self-service: ignore the path param and act on the caller's own signature
+	// so a member cannot delete another member's signature (AUDIT IDOR).
+	callerID, errCaller := helper.GetUserId(ctx)
+	if errCaller != nil {
+		utils.ErrorResponse(ctx, helper.ErrorModel{Code: 400, Message: "Bad Request"})
+		return
+	}
+	userId := *callerID
 
 	err := controller.signatureService.Delete(userId, orgID)
 	if err != nil {

@@ -59,26 +59,27 @@ func (t *AppSettingsRepositoryImpl) Update(appSettings []model.AppSettings, orgI
 		return helper.ErrorCatcher(errParse, 500, &msg)
 	}
 
-	trx := t.Db.Begin()
-	trx.Begin()
-
-	for _, value := range appSettings {
-		var existing model.AppSettings
-		err := t.Db.Where("organization_id = ? AND key = ?", orgID, value.Key).First(&existing).Error
-		if err != nil {
-			value.OrganizationID = &orgUUID
-			if errCreate := t.Db.Create(&value).Error; errCreate != nil {
-				msg := "Failed to Get All AppSettings Data"
-				return helper.ErrorCatcher(errCreate, 500, &msg)
-			}
-		} else {
-			if errUpdate := t.Db.Model(&existing).Updates(value).Error; err != nil {
-				msg := "Failed to Get All AppSettings Data"
-				return helper.ErrorCatcher(errUpdate, 500, &msg)
+	txErr := t.Db.Transaction(func(tx *gorm.DB) error {
+		for _, value := range appSettings {
+			var existing model.AppSettings
+			dbErr := tx.Where("organization_id = ? AND key = ?", orgID, value.Key).First(&existing).Error
+			if dbErr != nil {
+				value.OrganizationID = &orgUUID
+				if createErr := tx.Create(&value).Error; createErr != nil {
+					return createErr
+				}
+			} else {
+				if updateErr := tx.Model(&existing).Updates(value).Error; updateErr != nil {
+					return updateErr
+				}
 			}
 		}
-	}
+		return nil
+	})
 
-	trx.Commit()
+	if txErr != nil {
+		msg := "Failed to Update AppSettings Data"
+		return helper.ErrorCatcher(txErr, 500, &msg)
+	}
 	return nil
 }

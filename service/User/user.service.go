@@ -15,6 +15,7 @@ type UserService interface {
 	Update(request request.UpdateUserRequest, orgID string) *helper.ErrorModel
 	Delete(id string, orgID string) *helper.ErrorModel
 	MultipleDelete(ids []string, orgID string) *helper.ErrorModel
+	CountActiveUsers(orgID string) (int64, *helper.ErrorModel)
 
 	UpdateBiodata(id string, request request.UpdateBiodataRequest, orgID string) *helper.ErrorModel
 	UpdateEmail(id string, request request.UpdateEmailRequest, orgID string) *helper.ErrorModel

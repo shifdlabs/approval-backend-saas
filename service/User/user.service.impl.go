@@ -165,6 +165,11 @@ func (t UserServiceImpl) Update(request request.UpdateUserRequest, orgID string)
 	result.Email = request.Email
 	result.Role = request.Role
 	result.Position = position
+	if position != nil {
+		result.PositionID = position.ID
+	} else {
+		result.PositionID = nil
+	}
 	result.EmployeeID = request.EmployeeID
 	result.Access = request.Access
 	result.Phone = request.Phone
@@ -189,6 +194,10 @@ func (t UserServiceImpl) Update(request request.UpdateUserRequest, orgID string)
 	}
 
 	return nil
+}
+
+func (t UserServiceImpl) CountActiveUsers(orgID string) (int64, *helper.ErrorModel) {
+	return t.UserRepository.CountActive(orgID)
 }
 
 func (t UserServiceImpl) Delete(id string, orgID string) *helper.ErrorModel {
@@ -248,6 +257,11 @@ func (t UserServiceImpl) UpdateBiodata(id string, request request.UpdateBiodataR
 	user.LastName = request.LastName
 	user.Phone = request.Phone
 	user.Position = position
+	if position != nil {
+		user.PositionID = position.ID
+	} else {
+		user.PositionID = nil
+	}
 
 	errUpdate := t.UserRepository.Update(*user, orgID)
 	if errUpdate != nil {

@@ -2,12 +2,14 @@ package controller
 
 import (
 	request "Microservice/data/request/User"
+	response "Microservice/data/response/User"
 	"Microservice/helper"
 	"Microservice/helper/enums"
 	"Microservice/model"
 	service "Microservice/service/User"
 	userLogService "Microservice/service/UserLog"
 	"Microservice/utils"
+	"fmt"
 	"strings"
 
 	"github.com/gin-gonic/gin"
@@ -102,6 +104,24 @@ func (controller *UserController) Create(ctx *gin.Context) {
 	orgID, ok := helper.RequireOrgID(ctx)
 	if !ok {
 		return
+	}
+
+	userLimit := helper.GetUserLimit(ctx)
+	if userLimit >= 0 {
+		activeCount, errCount := controller.userService.CountActiveUsers(orgID)
+		if errCount != nil {
+			utils.ErrorResponse(ctx, *errCount)
+			return
+		}
+		if activeCount >= int64(userLimit) {
+			ctx.AbortWithStatusJSON(403, gin.H{
+				"error":   "Batas user untuk plan kamu sudah tercapai. Hubungi tim Shifd Labs untuk upgrade.",
+				"code":    "USER_LIMIT_REACHED",
+				"current": activeCount,
+				"limit":   userLimit,
+			})
+			return
+		}
 	}
 
 	var payload request.CreateUserRequest
@@ -321,6 +341,21 @@ func (controller *UserController) UpdatePassword(ctx *gin.Context) {
 		return
 	}
 
+	// Broken-access-control guard (AUDIT): this route is not AdminOnly because
+	// members change their own password here, but the target id comes from the
+	// body. Without this check any member could reset another member's password
+	// (account takeover). Allow only an admin/owner, or the user acting on self.
+	callerID, errCaller := helper.GetUserId(ctx)
+	if errCaller != nil {
+		utils.ErrorResponse(ctx, helper.ErrorModel{Code: 400, Message: "Bad Request"})
+		return
+	}
+	role := helper.GetOrgRole(ctx)
+	if role != "owner" && role != "admin" && payload.ID != *callerID {
+		utils.ErrorResponse(ctx, helper.ErrorModel{Code: 403, Message: "Forbidden."})
+		return
+	}
+
 	if err := controller.userService.UpdatePassword(payload, orgID); err != nil {
 		utils.ErrorResponse(ctx, *err)
 		return
@@ -435,10 +470,54 @@ func (controller *UserController) BulkImport(ctx *gin.Context) {
 		return
 	}
 
+	// Enforce the org's JWT user_limit claim before importing. -1 means
+	// unlimited (see helper.GetUserLimit), so the whole block is skipped then.
+	var skippedErrors []response.ImportError
+	userLimit := helper.GetUserLimit(ctx)
+	if userLimit >= 0 {
+		activeCount, errCount := controller.userService.CountActiveUsers(orgID)
+		if errCount != nil {
+			utils.ErrorResponse(ctx, *errCount)
+			return
+		}
+
+		available := userLimit - int(activeCount)
+		if available <= 0 {
+			ctx.AbortWithStatusJSON(403, gin.H{
+				"error":   "Batas user sudah tercapai, tidak ada slot tersisa.",
+				"code":    "USER_LIMIT_REACHED",
+				"current": activeCount,
+				"limit":   userLimit,
+			})
+			return
+		}
+
+		// Only the first `available` rows fit within the org's remaining
+		// quota; the rest are reported as skipped instead of imported.
+		if len(payload.Users) > available {
+			skipped := payload.Users[available:]
+			payload.Users = payload.Users[:available]
+
+			for i := range skipped {
+				rowNum := available + i + 2 // Excel row number (1-indexed + header)
+				skippedErrors = append(skippedErrors, response.ImportError{
+					Row:     rowNum,
+					Field:   "general",
+					Message: fmt.Sprintf("Dilewati: batas user organisasi tercapai (limit: %d)", userLimit),
+				})
+			}
+		}
+	}
+
 	importResponse, errResponse := controller.userService.BulkImport(payload, orgID)
 	if errResponse != nil {
 		utils.ErrorResponse(ctx, *errResponse)
 		return
+	}
+
+	if len(skippedErrors) > 0 {
+		importResponse.Errors = append(importResponse.Errors, skippedErrors...)
+		importResponse.FailedCount += len(skippedErrors)
 	}
 	utils.SuccessResponse(ctx, importResponse)
 }

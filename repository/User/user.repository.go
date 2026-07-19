@@ -15,6 +15,10 @@ type UserRepository interface {
 	Delete(id string, orgID string) *helper.ErrorModel
 	MultipleDelete(ids []string, orgID string) *helper.ErrorModel
 
+	// CountActive counts active (access=true) members in the org, used to
+	// enforce the JWT user_limit claim before creating a new member.
+	CountActive(orgID string) (int64, *helper.ErrorModel)
+
 	// GetUnscoped and GetByEmailUnscoped intentionally bypass org filtering.
 	// They exist only for pre-authentication flows (password reset, the
 	// now-unrouted local login/refresh) where no org_id is known yet — the

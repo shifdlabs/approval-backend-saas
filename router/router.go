@@ -6,17 +6,35 @@ import (
 	"Microservice/helper"
 	"Microservice/pkg/jwks"
 	"net/http"
+	"strings"
+	"time"
 
 	"github.com/gin-gonic/gin"
 	"gorm.io/gorm"
 )
 
-func CORS() gin.HandlerFunc {
-	allowedOrigins := map[string]bool{
-		"http://localhost:5173":  true,
-		"http://localhost:5176":  true,
-		"https://alphasoftn.com": true,
+// parseCORSOrigins turns the comma-separated CORS_ALLOWED_ORIGINS env value into
+// an allowlist set (AUDIT SEC-10). When empty it falls back to the built-in
+// local-dev + production defaults so existing deployments keep working.
+func parseCORSOrigins(raw string) map[string]bool {
+	allowed := map[string]bool{}
+	for _, o := range strings.Split(raw, ",") {
+		if o = strings.TrimSpace(o); o != "" {
+			allowed[o] = true
+		}
 	}
+	if len(allowed) == 0 {
+		allowed = map[string]bool{
+			"http://localhost:5173":  true,
+			"http://localhost:5174":  true,
+			"http://localhost:5176":  true,
+			"https://alphasoftn.com": true,
+		}
+	}
+	return allowed
+}
+
+func CORS(allowedOrigins map[string]bool) gin.HandlerFunc {
 	return func(c *gin.Context) {
 		origin := c.GetHeader("Origin")
 		if allowedOrigins[origin] {
@@ -62,13 +80,15 @@ func NewRouter(
 	delegatorController *controller.DelegatorController,
 	verificationController *controller.VerificationController,
 	letterTemplateController *controller.LetterTemplateController,
+	uploadController *controller.UploadController,
+	corsOrigins string,
 ) *gin.Engine {
 	service := gin.Default()
-	service.Use(CORS())
+	service.Use(CORS(parseCORSOrigins(corsOrigins)))
 
 	// Shared Phase 2 auth pipeline: validate the SIS JWT (JWKS), then enforce
 	// org scope + the shifd-approval subscription. Applied to every protected group.
-	authMW := middleware.JWKSAuth(jwksClient)
+	authMW := middleware.JWKSAuth(jwksClient, Db)
 	subMW := middleware.SubscriptionCheck()
 
 	// Public health check — no auth.
@@ -103,7 +123,7 @@ func NewRouter(
 	protectedUserRouter.GET("/:id", userController.GetUserByID)
 	protectedUserRouter.GET("", userController.GetAll)
 	protectedUserRouter.GET("/except-current", userController.GetAllUserExceptCurrent)
-	protectedUserRouter.PUT("", userController.Update)
+	protectedUserRouter.PUT("", middleware.AdminOnly(Db), userController.Update)
 	protectedUserRouter.DELETE("/:id", middleware.AdminOnly(Db), userController.Delete)
 	protectedUserRouter.DELETE("/deletes", middleware.AdminOnly(Db), userController.MultipleDelete)
 	protectedUserRouter.PUT("/role", middleware.AdminOnly(Db), userController.UpdateRole)
@@ -165,15 +185,15 @@ func NewRouter(
 	protectedAppSettingsRouter := router.Group("/appsettings")
 	protectedAppSettingsRouter.Use(authMW, subMW)
 	protectedAppSettingsRouter.GET("", appSettingsController.GetAll)
-	protectedAppSettingsRouter.PUT("", appSettingsController.Update)
+	protectedAppSettingsRouter.PUT("", middleware.AdminOnly(Db), appSettingsController.Update)
 
 	protectedPositionRouter := router.Group("/position")
 	protectedPositionRouter.Use(authMW, subMW)
 	protectedPositionRouter.GET("", positionController.GetAll)
 	protectedPositionRouter.GET("/:id", positionController.Get)
-	protectedPositionRouter.PUT("", positionController.Update)
-	protectedPositionRouter.POST("", positionController.Create)
-	protectedPositionRouter.DELETE("/:id", positionController.Delete)
+	protectedPositionRouter.PUT("", middleware.AdminOnly(Db), positionController.Update)
+	protectedPositionRouter.POST("", middleware.AdminOnly(Db), positionController.Create)
+	protectedPositionRouter.DELETE("/:id", middleware.AdminOnly(Db), positionController.Delete)
 
 	protectedBookmarkRouter := router.Group("/bookmark")
 	protectedBookmarkRouter.Use(authMW, subMW)
@@ -186,15 +206,15 @@ func NewRouter(
 	protectedNumberingGroupRouter.Use(authMW, subMW)
 	protectedNumberingGroupRouter.GET("", numberingGroupController.GetAll)
 	protectedNumberingGroupRouter.GET("/:id", numberingGroupController.Get)
-	protectedNumberingGroupRouter.POST("", numberingGroupController.Create)
-	protectedNumberingGroupRouter.DELETE("/:id", numberingGroupController.Delete)
+	protectedNumberingGroupRouter.POST("", middleware.AdminOnly(Db), numberingGroupController.Create)
+	protectedNumberingGroupRouter.DELETE("/:id", middleware.AdminOnly(Db), numberingGroupController.Delete)
 
 	protectedNumberingFormatRouter := router.Group("/numbering/format")
 	protectedNumberingFormatRouter.Use(authMW, subMW)
 	protectedNumberingFormatRouter.GET("", numberingFormatController.GetAll)
 	protectedNumberingFormatRouter.GET("/grouped", numberingFormatController.GetAllWithGrouped)
-	protectedNumberingFormatRouter.POST("", numberingFormatController.Create)
-	protectedNumberingFormatRouter.DELETE("/:id", numberingFormatController.Delete)
+	protectedNumberingFormatRouter.POST("", middleware.AdminOnly(Db), numberingFormatController.Create)
+	protectedNumberingFormatRouter.DELETE("/:id", middleware.AdminOnly(Db), numberingFormatController.Delete)
 
 	protectedDocumentNumberRouter := router.Group("/document/number")
 	protectedDocumentNumberRouter.Use(authMW, subMW)
@@ -218,8 +238,17 @@ func NewRouter(
 	protectedDelegatorRouter.PUT("/:id", delegatorController.Update)
 	protectedDelegatorRouter.DELETE("/:id", delegatorController.Delete)
 
-	// Public verification route — no auth middleware
+	// S3 presigned-URL issuer (AUDIT SEC-01): authenticated org members exchange
+	// an object key for a short-lived presigned PUT/DELETE URL, so the browser
+	// never holds IAM credentials.
+	protectedUploadRouter := router.Group("/upload")
+	protectedUploadRouter.Use(authMW, subMW)
+	protectedUploadRouter.POST("/presign", uploadController.Presign)
+
+	// Public verification route — no auth middleware. Rate-limited per IP to
+	// blunt scraping of documents by UUID (AUDIT SEC-10).
 	verificationRouter := router.Group("/verification")
+	verificationRouter.Use(middleware.RateLimit(30, time.Minute))
 	verificationRouter.GET("/:id", verificationController.GetVerification)
 
 	// Letter template routes — GET all/by-id: semua auth user; CUD: admin only

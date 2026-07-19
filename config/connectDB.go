@@ -13,7 +13,13 @@ import (
 
 func DatabaseConnection(config *Config) *gorm.DB {
 	var err error
-	dsn := fmt.Sprintf("host=%s user=%s password=%s dbname=%s port=%s sslmode=disable TimeZone=Asia/Shanghai", config.DBHost, config.DBUserName, config.DBUserPassword, config.DBName, config.DBPort)
+	// AUDIT SEC-10: sslmode is now configurable via POSTGRES_SSLMODE so TLS can
+	// be enabled in production; defaults to "disable" to preserve local dev.
+	sslMode := config.DBSSLMode
+	if sslMode == "" {
+		sslMode = "disable"
+	}
+	dsn := fmt.Sprintf("host=%s user=%s password=%s dbname=%s port=%s sslmode=%s TimeZone=Asia/Shanghai", config.DBHost, config.DBUserName, config.DBUserPassword, config.DBName, config.DBPort, sslMode)
 
 	DB, err := gorm.Open(postgres.Open(dsn), &gorm.Config{})
 	if err != nil {
