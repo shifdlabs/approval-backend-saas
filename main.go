@@ -28,7 +28,6 @@ import (
 	documentReferenceRepository "Microservice/repository/DocumentReference"
 	documentSequenceRepository "Microservice/repository/DocumentSequence"
 	failedLoginAttemptRepository "Microservice/repository/FailedLoginAttempt"
-	passwordResetTokenRepository "Microservice/repository/PasswordResetToken"
 	numberingFormatRepository "Microservice/repository/NumberingFormat"
 	numberingGroupRepository "Microservice/repository/NumberingGroup"
 	positionRepository "Microservice/repository/Position"
@@ -38,7 +37,6 @@ import (
 	userLogRepository "Microservice/repository/UserLog"
 
 	appSettingService "Microservice/service/AppSettings"
-	authService "Microservice/service/Authentication"
 	bookmarkService "Microservice/service/Bookmark"
 	delegatorService "Microservice/service/Delegator"
 	slaService "Microservice/service/SLA"
@@ -52,7 +50,6 @@ import (
 	positionService "Microservice/service/Position"
 	recipientService "Microservice/service/Recipient"
 	signatureService "Microservice/service/Signature"
-	tokenService "Microservice/service/Token"
 	userService "Microservice/service/User"
 	userLogService "Microservice/service/UserLog"
 	letterTemplateRepository "Microservice/repository/LetterTemplate"
@@ -122,7 +119,6 @@ func main() {
 	db.AutoMigrate(&model.Document{}, &model.Bookmark{})
 	db.AutoMigrate(&model.Document{}, &model.DocumentNumbers{})
 	db.AutoMigrate(&model.User{}, &model.Signature{})
-	db.AutoMigrate(&model.User{}, &model.PasswordResetToken{})
 	db.AutoMigrate(&model.Delegator{})
 	db.AutoMigrate(&model.User{}, &model.Delegator{})
 	db.AutoMigrate(&model.LetterTemplate{})
@@ -146,12 +142,9 @@ func main() {
 	documentReferenceRepository := documentReferenceRepository.NewDocumentReferenceRepositoryImpl(db)
 	signatureRepository := signatureRepository.NewSignatureRepositoryImpl(db)
 	failedLoginAttemptRepository := failedLoginAttemptRepository.NewFailedLoginAttemptRepositoryImpl(db)
-	passwordResetTokenRepository := passwordResetTokenRepository.NewPasswordResetTokenRepositoryImpl(db)
 	delegatorRepository := delegatorRepository.NewDelegatorRepositoryImpl(db)
 
 	// Servic
-	tokenService := tokenService.NewTokenServiceImpl(userRepository)
-	authService := authService.NewAuthServiceImpl(userRepository, passwordResetTokenRepository, failedLoginAttemptRepository, validate, envConf)
 	userService := userService.NewUserServiceImpl(userRepository, positionRepositoy, failedLoginAttemptRepository, validate)
 	userLogService := userLogService.NewUserLogServiceImpl(userLogRepository, validate)
 	documentSequenceService := documentSequenceService.NewDocumentSequenceServiceImpl(documentSequenceRepository, validate)
@@ -186,8 +179,6 @@ func main() {
 
 	// Controllers
 	userController := controller.NewUserController(userService, userLogService)
-	authController := controller.NewAuthController(authService, userService, userLogService)
-	tokenController := controller.NewTokenController(tokenService)
 	documentController := controller.NewDocumentController(documentService, documentNumbersService, userLogService)
 	documentHistoryController := controller.NewDocumentHistoryController(documentHistoryService)
 	documentSequenceController := controller.NewDocumentSequenceController(documentSequenceService)
@@ -219,8 +210,6 @@ func main() {
 		db,
 		jwksClient,
 		userController,
-		authController,
-		tokenController,
 		documentController,
 		documentHistoryController,
 		documentAttachmentController,

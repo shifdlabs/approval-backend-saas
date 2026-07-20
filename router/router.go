@@ -62,8 +62,6 @@ func NewRouter(
 	Db *gorm.DB,
 	jwksClient *jwks.JWKSClient,
 	userController *controller.UserController,
-	authController *controller.AuthController,
-	tokenController *controller.TokenController,
 	documentController *controller.DocumentController,
 	documentHistoryController *controller.DocumentHistoryController,
 	documentAttachmentController *controller.DocumentAttachmentController,
@@ -109,12 +107,9 @@ func NewRouter(
 
 	router := service.Group("/api")
 
-	// Phase 2: login, register, refresh and logout are owned by SIS — the
-	// Approval Backend no longer issues or refreshes tokens. Only the
-	// password-reset flow (which mints no JWT) remains, and stays public.
-	authRouter := router.Group("/auth")
-	authRouter.POST("/forgot-password", authController.ForgotPassword)
-	authRouter.POST("/reset-password", authController.ResetPassword)
+	// Phase 2: ALL authentication (login, register, refresh, logout, and
+	// password recovery/activation) is owned by SIS. The Approval Backend
+	// exposes no /auth routes — the frontend talks to SIS directly for those.
 
 	protectedUserRouter := router.Group("/user")
 	protectedUserRouter.Use(authMW, subMW)
