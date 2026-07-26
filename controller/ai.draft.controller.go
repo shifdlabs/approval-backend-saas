@@ -21,9 +21,11 @@ func NewAIDraftController(svc service.AIDraftService, logSvc userLogService.User
 	return &AIDraftController{service: svc, userLogService: logSvc}
 }
 
-// Generate handles POST /api/ai/draft — it asks SAIS for a letter draft and
-// returns the text for the editor. Nothing is persisted: the draft only becomes
-// a document once the user saves it through the normal document flow.
+// Generate handles POST /api/ai/draft — it asks SAIS for one draft per style
+// (formal/ringkas/semi-formal) in parallel and returns whichever succeeded, so
+// the user can compare and pick before it goes into the editor. Nothing is
+// persisted here: a draft only becomes a document once the user saves it
+// through the normal document flow.
 func (c *AIDraftController) Generate(ctx *gin.Context) {
 	orgID, ok := helper.RequireOrgID(ctx)
 	if !ok {

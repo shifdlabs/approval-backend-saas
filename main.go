@@ -167,10 +167,11 @@ func main() {
 	letterTemplateRepo := letterTemplateRepository.NewLetterTemplateRepositoryImpl(db)
 	letterTemplateSvc := letterTemplateService.NewLetterTemplateServiceImpl(letterTemplateRepo, validate)
 
-	// defaultAIDraftPerHour caps AI draft generations per user per hour when
-	// AI_DRAFT_PER_HOUR is unset. Generous enough for real drafting work,
-	// low enough that a runaway client cannot burn the LLM budget.
-	const defaultAIDraftPerHour = 20
+	// defaultAIDraftPerHour caps AI draft *generate clicks* per user per hour
+	// when AI_DRAFT_PER_HOUR is unset — each click now fans out to 3 parallel
+	// LLM calls (one per style, see service/AIDraft), so this is lower than a
+	// single-draft-per-click budget would be for the same total LLM spend.
+	const defaultAIDraftPerHour = 8
 
 	// Seed sla_max_days default if not present, for the default org seeded by
 	// db/migrations/002_add_organization_id.sql.
