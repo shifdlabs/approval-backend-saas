@@ -15,6 +15,7 @@ import (
 	"Microservice/model"
 	"Microservice/pkg/jwks"
 	"Microservice/pkg/s3presign"
+	"Microservice/pkg/sais"
 	"Microservice/router"
 
 	appSettingsRepository "Microservice/repository/AppSettings"
@@ -36,6 +37,7 @@ import (
 	userRepository "Microservice/repository/User"
 	userLogRepository "Microservice/repository/UserLog"
 
+	aiDraftService "Microservice/service/AIDraft"
 	appSettingService "Microservice/service/AppSettings"
 	bookmarkService "Microservice/service/Bookmark"
 	delegatorService "Microservice/service/Delegator"
@@ -165,6 +167,11 @@ func main() {
 	letterTemplateRepo := letterTemplateRepository.NewLetterTemplateRepositoryImpl(db)
 	letterTemplateSvc := letterTemplateService.NewLetterTemplateServiceImpl(letterTemplateRepo, validate)
 
+	// defaultAIDraftPerHour caps AI draft generations per user per hour when
+	// AI_DRAFT_PER_HOUR is unset. Generous enough for real drafting work,
+	// low enough that a runaway client cannot burn the LLM budget.
+	const defaultAIDraftPerHour = 20
+
 	// Seed sla_max_days default if not present, for the default org seeded by
 	// db/migrations/002_add_organization_id.sql.
 	const defaultOrgID = "00000000-0000-0000-0000-000000000001"
@@ -205,6 +212,22 @@ func main() {
 	}
 	uploadController := controller.NewUploadController(s3Presigner)
 
+	// SAIS (Shifd AI Service) — AI letter drafting. The LLM key lives in SAIS,
+	// never here. When SAIS_URL/SAIS_INTERNAL_SECRET are absent the client
+	// reports itself disabled and the AI endpoint answers 503; everything else
+	// in Approval keeps working.
+	saisClient := sais.NewClient(envConf.SAISURL, envConf.SAISInternalSecret)
+	if !saisClient.Enabled() {
+		log.Println("warning: SAIS not configured (SAIS_URL/SAIS_INTERNAL_SECRET missing) — AI draft will return 503")
+	}
+	aiDraftSvc := aiDraftService.NewAIDraftServiceImpl(saisClient)
+	aiDraftController := controller.NewAIDraftController(aiDraftSvc, userLogService)
+
+	aiDraftPerHour := envConf.AIDraftPerHour
+	if aiDraftPerHour <= 0 {
+		aiDraftPerHour = defaultAIDraftPerHour
+	}
+
 	// Initialize Router
 	routes := router.NewRouter(
 		db,
@@ -227,7 +250,9 @@ func main() {
 		verificationController,
 		letterTemplateController,
 		uploadController,
+		aiDraftController,
 		envConf.CORSAllowedOrigins,
+		aiDraftPerHour,
 	)
 
 	// Intialize Server
