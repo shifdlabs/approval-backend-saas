@@ -1,6 +1,7 @@
 package middleware
 
 import (
+	"Microservice/helper"
 	"net/http"
 	"sync"
 	"time"
@@ -16,6 +17,25 @@ import (
 // per instance. For a single-instance deployment this is sufficient; move to a
 // shared store (Redis) if the service is horizontally scaled.
 func RateLimit(limit int, window time.Duration) gin.HandlerFunc {
+	return RateLimitBy(func(c *gin.Context) string { return c.ClientIP() }, limit, window)
+}
+
+// RateLimitByUser buckets by authenticated user id instead of client IP. Use it
+// for authenticated, expensive endpoints (e.g. AI draft generation): a whole
+// office shares one public IP, so an IP bucket would let one user exhaust
+// everyone else's quota. Falls back to the IP when the request is unauthenticated.
+func RateLimitByUser(limit int, window time.Duration) gin.HandlerFunc {
+	return RateLimitBy(func(c *gin.Context) string {
+		if userID := helper.GetUserID(c); userID != "" {
+			return userID
+		}
+		return c.ClientIP()
+	}, limit, window)
+}
+
+// RateLimitBy is the shared implementation; keyFn decides what counts as one
+// client. Each call gets its own independent bucket store.
+func RateLimitBy(keyFn func(*gin.Context) string, limit int, window time.Duration) gin.HandlerFunc {
 	type bucket struct {
 		count int
 		reset time.Time
@@ -33,9 +53,9 @@ func RateLimit(limit int, window time.Duration) gin.HandlerFunc {
 		for range ticker.C {
 			now := time.Now()
 			mu.Lock()
-			for ip, b := range clients {
+			for key, b := range clients {
 				if now.After(b.reset) {
-					delete(clients, ip)
+					delete(clients, key)
 				}
 			}
 			mu.Unlock()
@@ -43,14 +63,14 @@ func RateLimit(limit int, window time.Duration) gin.HandlerFunc {
 	}()
 
 	return func(c *gin.Context) {
-		ip := c.ClientIP()
+		key := keyFn(c)
 		now := time.Now()
 
 		mu.Lock()
-		b, ok := clients[ip]
+		b, ok := clients[key]
 		if !ok || now.After(b.reset) {
 			b = &bucket{count: 0, reset: now.Add(window)}
-			clients[ip] = b
+			clients[key] = b
 		}
 		b.count++
 		exceeded := b.count > limit

@@ -36,6 +36,16 @@ type Config struct {
 	SISIssuer           string        `mapstructure:"SIS_ISSUER"`
 	JWKSRefreshInterval time.Duration `mapstructure:"JWKS_REFRESH_INTERVAL"`
 
+	// SAIS (Shifd AI Service) — AI letter-draft generation. Both must be set for
+	// the feature to be enabled; when either is empty the AI endpoint answers
+	// 503 and the rest of Approval is unaffected.
+	// SAISInternalSecret must match INTERNAL_SERVICE_SECRET in SAIS's app.env.
+	SAISURL            string `mapstructure:"SAIS_URL"`
+	SAISInternalSecret string `mapstructure:"SAIS_INTERNAL_SECRET"`
+	// AIDraftPerHour caps draft generations per user per hour (quota lives in
+	// the calling product, not SAIS). Zero falls back to defaultAIDraftPerHour.
+	AIDraftPerHour int `mapstructure:"AI_DRAFT_PER_HOUR"`
+
 	// S3 storage — the backend now holds the credentials and issues short-lived
 	// presigned URLs to the browser (AUDIT SEC-01). Any key that was previously
 	// shipped in the frontend bundle must be rotated.

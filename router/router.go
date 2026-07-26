@@ -13,6 +13,11 @@ import (
 	"gorm.io/gorm"
 )
 
+// aiDraftWriteDeadline is how long the AI draft route may take to produce a
+// response. It must exceed the SAIS client timeout (75s) so a SAIS error still
+// reaches the browser instead of the connection being cut first.
+const aiDraftWriteDeadline = 90 * time.Second
+
 // parseCORSOrigins turns the comma-separated CORS_ALLOWED_ORIGINS env value into
 // an allowlist set (AUDIT SEC-10). When empty it falls back to the built-in
 // local-dev + production defaults so existing deployments keep working.
@@ -79,7 +84,9 @@ func NewRouter(
 	verificationController *controller.VerificationController,
 	letterTemplateController *controller.LetterTemplateController,
 	uploadController *controller.UploadController,
+	aiDraftController *controller.AIDraftController,
 	corsOrigins string,
+	aiDraftPerHour int,
 ) *gin.Engine {
 	service := gin.Default()
 	service.Use(CORS(parseCORSOrigins(corsOrigins)))
@@ -254,6 +261,21 @@ func NewRouter(
 	templateRouter.POST("", middleware.AdminOnly(Db), letterTemplateController.Create)
 	templateRouter.PUT("/:id", middleware.AdminOnly(Db), letterTemplateController.Update)
 	templateRouter.DELETE("/:id", middleware.AdminOnly(Db), letterTemplateController.Delete)
+
+	// AI draft generation — proxied to SAIS, which holds the LLM key.
+	// Quota is enforced HERE, not in SAIS: SAIS is product-agnostic and trusts
+	// the caller to have checked limits. Bucketed per user, not per IP, so one
+	// heavy user cannot exhaust a whole office's quota behind a shared NAT.
+	// The write deadline is extended past the server's 10s WriteTimeout because a
+	// generation can legitimately run much longer (see the middleware comment).
+	aiRouter := router.Group("/ai")
+	aiRouter.Use(
+		authMW,
+		subMW,
+		middleware.RateLimitByUser(aiDraftPerHour, time.Hour),
+		middleware.ExtendWriteDeadline(aiDraftWriteDeadline),
+	)
+	aiRouter.POST("/draft", aiDraftController.Generate)
 
 	return service
 }
