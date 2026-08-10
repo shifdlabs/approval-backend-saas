@@ -5,11 +5,17 @@ import (
 
 	"Microservice/model"
 
+	uuid "github.com/satori/go.uuid"
 	"golang.org/x/crypto/bcrypt"
 	"gorm.io/gorm"
 )
 
 func SeedUsers(db *gorm.DB) error {
+	orgID, err := uuid.FromString(defaultOrgID)
+	if err != nil {
+		return err
+	}
+
 	users := []struct {
 		EmployeeID   string
 		Email        string
@@ -90,7 +96,7 @@ func SeedUsers(db *gorm.DB) error {
 
 		// 2. resolve PositionID FK — query from positions table
 		var position model.Position
-		if err := db.Where("name = ?", u.PositionName).First(&position).Error; err != nil {
+		if err := db.Where("name = ? AND organization_id = ?", u.PositionName, orgID).First(&position).Error; err != nil {
 			log.Printf("❌ Position '%s' not found for user '%s'\n", u.PositionName, u.Email)
 			return err
 		}
@@ -103,7 +109,8 @@ func SeedUsers(db *gorm.DB) error {
 
 		// 4. build and insert user
 		newUser := model.User{
-			PositionID: position.ID, // resolved FK from step 2
+			OrganizationID: &orgID,
+			PositionID:     position.ID, // resolved FK from step 2
 			EmployeeID: u.EmployeeID,
 			Email:      u.Email,
 			Password:   string(hash),
