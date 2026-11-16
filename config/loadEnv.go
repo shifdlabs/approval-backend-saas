@@ -53,6 +53,10 @@ type Config struct {
 	S3Bucket          string `mapstructure:"S3_BUCKET"`
 	S3AccessKeyID     string `mapstructure:"S3_ACCESS_KEY_ID"`
 	S3SecretAccessKey string `mapstructure:"S3_SECRET_ACCESS_KEY"`
+	// S3Endpoint is optional: set it for an S3-compatible store such as
+	// Cloudflare R2 (https://<account_id>.r2.cloudflarestorage.com, with
+	// S3_REGION=auto). Empty means AWS S3.
+	S3Endpoint string `mapstructure:"S3_ENDPOINT"`
 
 	// CORSAllowedOrigins is a comma-separated allowlist of browser origins
 	// (AUDIT SEC-10). Empty falls back to the built-in local-dev defaults.

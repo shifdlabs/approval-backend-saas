@@ -207,7 +207,7 @@ func main() {
 	// S3 presigner (AUDIT SEC-01): the backend now holds the S3 credentials and
 	// hands the browser short-lived presigned URLs. New(...) returns nil when
 	// creds are absent; the controller reports 503 in that case.
-	s3Presigner := s3presign.New(envConf.S3Region, envConf.S3Bucket, envConf.S3AccessKeyID, envConf.S3SecretAccessKey)
+	s3Presigner := s3presign.New(envConf.S3Region, envConf.S3Bucket, envConf.S3AccessKeyID, envConf.S3SecretAccessKey, envConf.S3Endpoint)
 	if !s3Presigner.Enabled() {
 		log.Println("warning: S3 presigner not configured (S3_* env missing) — file uploads will return 503")
 	}

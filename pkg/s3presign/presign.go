@@ -32,16 +32,42 @@ type Presigner struct {
 	bucket    string
 	accessKey string
 	secretKey string
+	// endpointHost, when set, sends path-style requests (host/bucket/key) to an
+	// S3-compatible store such as Cloudflare R2 instead of AWS.
+	endpointHost string
 }
 
 // New builds a Presigner. It returns nil when any required field is empty, so a
 // nil *Presigner is a valid "S3 uploads are not configured" sentinel that
 // callers can check with Enabled().
-func New(region, bucket, accessKey, secretKey string) *Presigner {
+//
+// endpoint is optional. Empty targets AWS S3 (virtual-hosted URLs). Otherwise it
+// is the base URL of an S3-compatible store, e.g. Cloudflare R2's
+// "https://<account_id>.r2.cloudflarestorage.com" (use region "auto" for R2).
+func New(region, bucket, accessKey, secretKey, endpoint string) *Presigner {
 	if region == "" || bucket == "" || accessKey == "" || secretKey == "" {
 		return nil
 	}
-	return &Presigner{region: region, bucket: bucket, accessKey: accessKey, secretKey: secretKey}
+	return &Presigner{
+		region:       region,
+		bucket:       bucket,
+		accessKey:    accessKey,
+		secretKey:    secretKey,
+		endpointHost: endpointHost(endpoint),
+	}
+}
+
+// endpointHost reduces an endpoint URL to its host, dropping any scheme, path
+// and trailing slash.
+func endpointHost(endpoint string) string {
+	h := strings.TrimSpace(endpoint)
+	if i := strings.Index(h, "://"); i >= 0 {
+		h = h[i+3:]
+	}
+	if i := strings.Index(h, "/"); i >= 0 {
+		h = h[:i]
+	}
+	return h
 }
 
 // Enabled reports whether the presigner is configured (non-nil with creds).
@@ -56,7 +82,12 @@ func (p *Presigner) Presign(method, key string, expires time.Duration) (string, 
 		return "", fmt.Errorf("s3presign: not configured")
 	}
 	host := fmt.Sprintf("%s.s3.%s.amazonaws.com", p.bucket, p.region)
-	return p.presign(strings.ToUpper(method), key, host, time.Now().UTC(), expires)
+	objectPath := key
+	if p.endpointHost != "" {
+		host = p.endpointHost
+		objectPath = p.bucket + "/" + key
+	}
+	return p.presign(strings.ToUpper(method), objectPath, host, time.Now().UTC(), expires)
 }
 
 // presign is the deterministic core of Presign, split out so tests can pin the

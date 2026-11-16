@@ -52,14 +52,29 @@ func TestAWSURIEncode(t *testing.T) {
 }
 
 func TestNewReturnsNilWhenUnconfigured(t *testing.T) {
-	if New("", "b", "k", "s") != nil {
+	if New("", "b", "k", "s", "") != nil {
 		t.Error("expected nil Presigner when region is empty")
 	}
-	if New("r", "b", "k", "s") == nil {
+	if New("r", "b", "k", "s", "") == nil {
 		t.Error("expected non-nil Presigner when fully configured")
 	}
 	var p *Presigner
 	if p.Enabled() {
 		t.Error("nil Presigner should report Enabled() == false")
+	}
+}
+
+func TestPresignWithEndpointUsesPathStyle(t *testing.T) {
+	p := New("auto", "shifd-approval", "k", "s", "https://acct123.r2.cloudflarestorage.com/")
+	url, err := p.Presign("put", "signatures/a b.png", 5*time.Minute)
+	if err != nil {
+		t.Fatalf("Presign returned error: %v", err)
+	}
+	const wantPrefix = "https://acct123.r2.cloudflarestorage.com/shifd-approval/signatures/a%20b.png?"
+	if !strings.HasPrefix(url, wantPrefix) {
+		t.Fatalf("got url %s, want prefix %s", url, wantPrefix)
+	}
+	if !strings.Contains(url, "%2Fauto%2Fs3%2Faws4_request") {
+		t.Fatalf("credential scope should use region auto: %s", url)
 	}
 }
